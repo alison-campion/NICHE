@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Feb 10 09:56:28 2017
+
+@author: alicampion
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import os
+import xlrd
+from scipy.interpolate import interp1d
+
+dir_name = '/Volumes/Lexar/Kimetrica/NICHE/NICHE_Sampling'
+os.chdir(dir_name)
+
+
+class zscores(object):
+    
+    def __init__(self):
+        
+        self.data = {}
+        self.interpolated = {}
+        
+
+    def get_sheet_names(self, wb):
+        '''
+        Find all sheet names in the excel file.
+        '''
+        wb = xlrd.open_workbook(os.path.join(dir_name, wb))
+        sheet_list = wb.sheet_names()
+        
+        return sheet_list
+
+        
+    def import_standards(self,sheet_list,wb):
+        '''
+        Use sheet list from excel file to import all standards into self.data
+        '''
+        for sheet in sheet_list:      
+            self.data[sheet] = pd.read_excel(wb,sheetname=sheet)
+            
+        return True
+        
+        
+    def interpolate_zscores(self, measure, xnew, kind='linear'):
+        x = np.linspace(-4, 4, num=9, endpoint=True)
+        self.interpolated[measure] = np.ones((self.data[measure].shape[0],xnew.shape[0]))*np.nan
+
+        for i in self.data[measure].index:
+            y = self.data[measure].loc[i][-9:self.data[measure].shape[1]]
+            f = interp1d(x, y, kind=kind)
+            self.interpolated[measure][i] = f(xnew)
+
+        
+#%%
+#Initialize all the data
+
+wb = '/data/UNICEF_standards.xlsx'
+stnds = zscores()
+a = stnds.get_sheet_names(wb)
+stnds.import_standards(a,wb)
+
+#Run specific measures and interpolated values
+xnew = np.linspace(-4, 4, num=900, endpoint=True)
+measure_list = ['wfa_boys','wfa_girls','wfl_boys','wfl_girls','hfa_boys','hfa_girls']
+for meas in measure_list:
+    stnds.interpolate_zscores(meas,xnew)
+
+#%%
+#Plotting
+x = np.linspace(-4, 4, num=9, endpoint=True)
+measure = 'wfa_boys'
+ind = 0
+xnew = np.linspace(-4, 4, num=900, endpoint=True)
+
+def plotting_dist(measure,ind,xnew):
+    #stnds.interpolate_zscores(measure,xnew)
+    plt.plot(xnew,stnds.interpolated[measure][ind],linewidth = 2)
+    plt.hold(True)
+    plt.plot(x,stnds.data[measure].loc[ind][-9:14],'ko',markersize=8)
+    plt.grid(True)
+    plt.xlabel('Z-score')
+    plt.ylabel(measure)
+    if 'a' in measure:
+        plt.title('Age: %1.1f' % stnds.data[measure].loc[ind,'Month'])
+    elif 'l' in measure:
+        plt.title('Length: %1.2f' % stnds.data[measure].loc[ind,'Length'])
+    else:
+        raise ValueError("Don't recognize the measure: %s" % measure)
+#%%
+
+def find_nearest(array, value):
+    idx = (np.abs(array-float(value))).argmin()
+    val=array[idx]
+    return val,idx
+ #%%   
+#Fill in z-scores for data points
+baseline = pd.read_csv('niche_baseline_machakos.csv')
+
+#Initialize columns for new measurements
+baseline['wfa_zscore'] = np.ones(baseline.shape[0])*np.nan
+baseline['hfa_zscore'] = np.ones(baseline.shape[0])*np.nan
+baseline['wfl_zscore'] = np.ones(baseline.shape[0])*np.nan
+
+#Find "no data" entries
+a = np.where(baseline['Weight [kg]']==99.7)[0]
+b = np.where(baseline['Height [cm]']==99.7)[0]
+c = np.where(baseline['Height [cm]']==88.8)[0]
+d = np.where(baseline['Weight [kg]']==88.8)[0]
+
+to_delete = np.concatenate((a,b,c,d))
+
+#Delete the no entries and reset the index
+baseline = baseline.drop(to_delete,0)
+baseline = baseline.reset_index()
+
+#Pull out the indices that are boyis and girls
+boys = np.where(baseline['Gender [1=Male,2=Female]']==1)[0]
+girls = np.where(baseline['Gender [1=Male,2=Female]']==2)[0]
+
+#Loop through Data and fill in z-scores                 
+for i in baseline.index:
+    age = baseline.loc[i,'Age [months]']
+    if age < 0:
+        continue
+    
+    length = baseline.loc[i,'Height [cm]']
+    if i in boys:
+        wfa_age_ind = np.where(stnds.data['wfa_boys']['Month']==age)[0][0]
+        hfa_age_ind = np.where(stnds.data['hfa_boys']['Month']==age)[0][0]
+        wfl_ind = find_nearest(stnds.data['wfl_boys']['Length'],length)[1]
+
+                               
+        wfa = xnew[find_nearest(stnds.interpolated['wfa_boys'][wfa_age_ind],
+                           baseline.loc[i,'Weight [kg]'])[1]]
+        hfa = xnew[find_nearest(stnds.interpolated['hfa_boys'][hfa_age_ind],
+                           baseline.loc[i,'Height [cm]'])[1]]
+        wfl = xnew[find_nearest(stnds.interpolated['wfl_boys'][wfl_ind],
+                           baseline.loc[i,'Weight [kg]'])[1]]
+                                
+        baseline.set_value(i,'wfa_zscore',wfa)
+        baseline.set_value(i,'hfa_zscore',hfa)
+        baseline.set_value(i,'wfl_zscore',wfl) 
+    elif i in girls:
+        wfa_age_ind = np.where(stnds.data['wfa_girls']['Month']==age)[0][0]
+        hfa_age_ind = np.where(stnds.data['hfa_girls']['Month']==age)[0][0]
+        wfl_ind = find_nearest(stnds.data['wfl_girls']['Length'],length)[1]
+        
+        wfa = xnew[find_nearest(stnds.interpolated['wfa_girls'][wfa_age_ind],
+                           baseline.loc[i,'Weight [kg]'])[1]]
+        hfa = xnew[find_nearest(stnds.interpolated['hfa_girls'][hfa_age_ind],
+                           baseline.loc[i,'Height [cm]'])[1]]
+        wfl = xnew[find_nearest(stnds.interpolated['wfl_girls'][wfl_ind],
+                           baseline.loc[i,'Weight [kg]'])[1]]
+       
+        baseline.set_value(i,'wfa_zscore',wfa)
+        baseline.set_value(i,'hfa_zscore',hfa)
+        baseline.set_value(i,'wfl_zscore',wfl)
+        
+    else:
+        continue
+
+#%%
+#Plotting Histograms
+def plot_hist(measure, savefig=False):
+    xbar = np.linspace(-3, 3, num=15, endpoint=True)
+    inds = np.where(np.isnan(baseline[measure])==False)[0]
+    plt.hist(baseline[measure][inds],bins=xbar,color=[0,0,.54])                        
+    plt.axvline(x=np.nanmedian(baseline[measure]),label='Median',
+                               linewidth=3,color=[1,0.54,0])
+    plt.axvline(x=np.nanmean(baseline[measure]),label='Mean',
+                             linewidth=3, color = [.6,.2,.8])
+    plt.grid(True)
+    plt.legend(['Medain %0.3f' % np.nanmedian(baseline[measure]),
+                'Mean %0.3f' % np.nanmean(baseline[measure])])
+    
+    if (measure == 'hfa_zscore'):
+        plt.title('Height for Age',fontsize=14)
+    elif (measure == 'wfa_zscore'):
+        plt.title('Weight for Age',fontsize=14)
+    elif (measure == 'wfl_zscore'):
+        plt.title('Weight for Height',fontsize=14)
+    else:
+        raise ValueError("Don't know this measure: %s" % measure)
+   
+    plt.xlabel('Z-Score')
+    plt.ylabel('Frequency')
+    
+    if savefig!=False:
+        plt.savefig(measure+'_hist.pdf', bbox_inches='tight')
