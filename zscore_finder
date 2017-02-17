@@ -12,6 +12,7 @@ import pandas as pd
 import os
 import xlrd
 from scipy.interpolate import interp1d
+from scipy import interpolate
 
 dir_name = '/Volumes/Lexar/Kimetrica/NICHE/NICHE_Sampling'
 os.chdir(dir_name)
@@ -46,6 +47,10 @@ class zscores(object):
         
         
     def interpolate_zscores(self, measure, xnew, kind='linear'):
+        '''
+        Stores an interpolated curve for each z-score at each age/length.  
+        Use this if you just want to plot the WAZ/HAZ/WHZ for the UN standard.
+        '''
         x = np.linspace(-4, 4, num=9, endpoint=True)
         self.interpolated[measure] = np.ones((self.data[measure].shape[0],xnew.shape[0]))*np.nan
 
@@ -53,51 +58,45 @@ class zscores(object):
             y = self.data[measure].loc[i][-9:self.data[measure].shape[1]]
             f = interp1d(x, y, kind=kind)
             self.interpolated[measure][i] = f(xnew)
+     
+            
+    def calculate_zscore(self, measure, ind, yToFind):
+        '''
+        Calculate the zcore for a specific child. 
+        
+        measure = column corresponding to WAZ, HAZ, or WHZ
+        ind = the index of the age/length of the child
+        yToFind = the height/weight of the child to be converted to a zscore
+        
+        '''
+        x = np.linspace(-4, 4, num=9, endpoint=True)
+        y = self.data[measure].loc[ind][-9:self.data[measure].shape[1]]
+        yreduced = y - yToFind
+        freduced = interpolate.UnivariateSpline(x, yreduced, s=0)
+        value = freduced.roots()
+        if freduced.roots().size:
+            return(freduced.roots()[0])
+        else:
+            return(np.nan)
 
+    def find_nearest(self, array, value):
+        '''
+        Helper function. Used to find the nearest length because it isn't an
+        integer like age.
+        '''
+        idx = (np.abs(array-float(value))).argmin()
+        val=array[idx]
+        return val,idx
         
 #%%
 #Initialize all the data
-
-wb = '/data/UNICEF_standards.xlsx'
+wb = 'UNICEF_standards.xlsx'
 stnds = zscores()
 a = stnds.get_sheet_names(wb)
 stnds.import_standards(a,wb)
 
-#Run specific measures and interpolated values
-xnew = np.linspace(-4, 4, num=900, endpoint=True)
-measure_list = ['wfa_boys','wfa_girls','wfl_boys','wfl_girls','hfa_boys','hfa_girls']
-for meas in measure_list:
-    stnds.interpolate_zscores(meas,xnew)
-
-#%%
-#Plotting
-x = np.linspace(-4, 4, num=9, endpoint=True)
-measure = 'wfa_boys'
-ind = 0
-xnew = np.linspace(-4, 4, num=900, endpoint=True)
-
-def plotting_dist(measure,ind,xnew):
-    #stnds.interpolate_zscores(measure,xnew)
-    plt.plot(xnew,stnds.interpolated[measure][ind],linewidth = 2)
-    plt.hold(True)
-    plt.plot(x,stnds.data[measure].loc[ind][-9:14],'ko',markersize=8)
-    plt.grid(True)
-    plt.xlabel('Z-score')
-    plt.ylabel(measure)
-    if 'a' in measure:
-        plt.title('Age: %1.1f' % stnds.data[measure].loc[ind,'Month'])
-    elif 'l' in measure:
-        plt.title('Length: %1.2f' % stnds.data[measure].loc[ind,'Length'])
-    else:
-        raise ValueError("Don't recognize the measure: %s" % measure)
-#%%
-
-def find_nearest(array, value):
-    idx = (np.abs(array-float(value))).argmin()
-    val=array[idx]
-    return val,idx
- #%%   
-#Fill in z-scores for data points
+#%% RUN THIS TO CLEAN DATA AND CALCULATE ZSCORES
+#Read in Data
 baseline = pd.read_csv('niche_baseline_machakos.csv')
 
 #Initialize columns for new measurements
@@ -123,46 +122,75 @@ girls = np.where(baseline['Gender [1=Male,2=Female]']==2)[0]
 
 #Loop through Data and fill in z-scores                 
 for i in baseline.index:
+    
+    #Find the Age
     age = baseline.loc[i,'Age [months]']
+    
+    #If Age is less than 0, skip
     if age < 0:
         continue
-    
+   
+    #Find Weight and Length
+    weight = baseline.loc[i,'Weight [kg]']
     length = baseline.loc[i,'Height [cm]']
+    
+    #Distinguish between boys and girls
     if i in boys:
-        wfa_age_ind = np.where(stnds.data['wfa_boys']['Month']==age)[0][0]
-        hfa_age_ind = np.where(stnds.data['hfa_boys']['Month']==age)[0][0]
-        wfl_ind = find_nearest(stnds.data['wfl_boys']['Length'],length)[1]
-
-                               
-        wfa = xnew[find_nearest(stnds.interpolated['wfa_boys'][wfa_age_ind],
-                           baseline.loc[i,'Weight [kg]'])[1]]
-        hfa = xnew[find_nearest(stnds.interpolated['hfa_boys'][hfa_age_ind],
-                           baseline.loc[i,'Height [cm]'])[1]]
-        wfl = xnew[find_nearest(stnds.interpolated['wfl_boys'][wfl_ind],
-                           baseline.loc[i,'Weight [kg]'])[1]]
-                                
-        baseline.set_value(i,'wfa_zscore',wfa)
-        baseline.set_value(i,'hfa_zscore',hfa)
-        baseline.set_value(i,'wfl_zscore',wfl) 
+        waz = 'wfa_boys'
+        haz = 'hfa_boys'
+        whz = 'wfl_boys'
+     
     elif i in girls:
-        wfa_age_ind = np.where(stnds.data['wfa_girls']['Month']==age)[0][0]
-        hfa_age_ind = np.where(stnds.data['hfa_girls']['Month']==age)[0][0]
-        wfl_ind = find_nearest(stnds.data['wfl_girls']['Length'],length)[1]
-        
-        wfa = xnew[find_nearest(stnds.interpolated['wfa_girls'][wfa_age_ind],
-                           baseline.loc[i,'Weight [kg]'])[1]]
-        hfa = xnew[find_nearest(stnds.interpolated['hfa_girls'][hfa_age_ind],
-                           baseline.loc[i,'Height [cm]'])[1]]
-        wfl = xnew[find_nearest(stnds.interpolated['wfl_girls'][wfl_ind],
-                           baseline.loc[i,'Weight [kg]'])[1]]
-       
-        baseline.set_value(i,'wfa_zscore',wfa)
-        baseline.set_value(i,'hfa_zscore',hfa)
-        baseline.set_value(i,'wfl_zscore',wfl)
-        
+        waz = 'wfa_girls'
+        haz = 'hfa_girls'
+        whz = 'wfl_girls'
+    
     else:
         continue
+     
+    #Find indices to know which age/length to look at
+    wfa_age_ind = np.where(stnds.data[waz]['Month']==age)[0][0]
+    hfa_age_ind = np.where(stnds.data[haz]['Month']==age)[0][0]
+    wfl_ind = stnds.find_nearest(stnds.data[whz]['Length'],length)[1]
 
+    #Set new values
+    baseline.set_value(i,'wfa_zscore',
+                       stnds.calculate_zscore(waz, wfa_age_ind, weight))
+    baseline.set_value(i,'hfa_zscore',
+                       stnds.calculate_zscore(haz, hfa_age_ind, length))
+    baseline.set_value(i,'wfl_zscore',
+                       stnds.calculate_zscore(whz, wfl_ind, weight))
+     
+
+#%%
+#Plotting
+x = np.linspace(-4, 4, num=9, endpoint=True)
+measure = 'wfa_boys'
+ind = 0
+xnew = np.linspace(-4, 4, num=900, endpoint=True)
+
+def plotting_dist(measure,ind,xnew):
+    #stnds.interpolate_zscores(measure,xnew)
+    plt.plot(xnew,stnds.interpolated[measure][ind],linewidth = 2)
+    plt.hold(True)
+    plt.plot(x,stnds.data[measure].loc[ind][-9:14],'ko',markersize=8)
+    plt.grid(True)
+    plt.xlabel('Z-score')
+    plt.ylabel(measure)
+    if 'a' in measure:
+        plt.title('Age: %1.1f' % stnds.data[measure].loc[ind,'Month'])
+    elif 'l' in measure:
+        plt.title('Length: %1.2f' % stnds.data[measure].loc[ind,'Length'])
+    else:
+        raise ValueError("Don't recognize the measure: %s" % measure)
+
+#%%
+#Run specific measures and interpolated values
+xnew = np.linspace(-4, 4, num=900, endpoint=True)
+measure_list = ['wfa_boys','wfa_girls','wfl_boys','wfl_girls','hfa_boys','hfa_girls']
+for meas in measure_list:
+    stnds.interpolate_zscores(meas,xnew)
+ 
 #%%
 #Plotting Histograms
 def plot_hist(measure, savefig=False):
